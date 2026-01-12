@@ -2,22 +2,23 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 
-// Appwrite Function started run this Function
 module.exports = async (context) => {
+    // Environment Variables
     const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d65';
     const PORT = process.env.PORT || 8080;
     const CFIP = process.env.CFIP || 'www.visa.com.sg';
-
-    context.log("Starting Node Process...");
 
     const download = (url, dest) => {
         return new Promise((resolve, reject) => {
             const file = fs.createWriteStream(dest);
             https.get(url, (res) => {
+                if (res.statusCode === 302 || res.statusCode === 301) {
+                    return download(res.headers.location, dest).then(resolve).catch(reject);
+                }
                 res.pipe(file);
                 file.on('finish', () => {
                     file.close();
-                    fs.chmodSync(dest, '755');
+                    fs.chmodSync(dest, '755'); // ခွင့်ပြုချက်ပေးခြင်း
                     resolve();
                 });
             }).on('error', reject);
@@ -25,12 +26,24 @@ module.exports = async (context) => {
     };
 
     try {
-        context.log("Downloading binaries...");
+        context.log("Cleaning and Downloading binaries...");
+        //old files deleted
+        if (fs.existsSync('/tmp/xray')) fs.unlinkSync('/tmp/xray');
+        if (fs.existsSync('/tmp/cloudflared')) fs.unlinkSync('/tmp/cloudflared');
+
+        // Direct Links မ
         await Promise.all([
-            download("https://github.com/eooce/test/raw/main/xray", "/tmp/xray"),
-            download("https://github.com/eooce/test/raw/main/cloudflared", "/tmp/cloudflared")
+            download("https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", "/tmp/xray.zip"),
+            download("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "/tmp/cloudflared")
         ]);
 
+        // UNZIP file (Xray)
+        context.log("Extracting Xray...");
+        const unzip = spawn('unzip', ['-o', '/tmp/xray.zip', 'xray', '-d', '/tmp/']);
+        await new Promise((res) => unzip.on('exit', res));
+        fs.chmodSync('/tmp/xray', '755');
+
+        // Config setup
         const config = {
             inbounds: [{
                 port: parseInt(PORT),
@@ -50,15 +63,19 @@ module.exports = async (context) => {
             const output = data.toString();
             if (output.includes('.trycloudflare.com')) {
                 const link = output.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-                context.log(`NODE READY: ${link[0]}`);
+                if (link) {
+                    context.log(`\n--- NODE READY ---`);
+                    context.log(`VLESS Link: vless://${UUID}@${CFIP}:443?encryption=none&security=tls&type=ws&host=${link[0].replace('https://', '')}&path=%2Fvless#Appwrite-Node`);
+                }
             }
         });
 
-        // Appwrite Function ကို တုံ့ပြန်မှုပေးရန်
-        return context.res.send("VLESS Node is running!");
+        // 3minites wait closed Function
+        await new Promise(resolve => setTimeout(resolve, 180000));
+        return context.res.send("Execution session finished.");
 
     } catch (err) {
         context.error("Error occurred: " + err.message);
-        return context.res.send("Failed to start.");
+        return context.res.send("Failed.");
     }
 };
