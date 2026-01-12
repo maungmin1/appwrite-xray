@@ -2,17 +2,18 @@ const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
+const crypto = require('crypto');
 
 module.exports = async (context) => {
     const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d65';
     const PORT = process.env.PORT || 8080;
     const CFIP = process.env.CFIP || 'www.visa.com.sg';
 
-    // သီးသန့် folder တစ်ခု သတ်မှတ်ခြင်း
-    const WORK_DIR = `/tmp/node_${Date.now()}`;
+    // Folder နာမည်ကို လုံးဝမတူအောင် random ဆောက်ခြင်း
+    const randomId = crypto.randomBytes(4).toString('hex');
+    const WORK_DIR = `/tmp/app_${randomId}`;
     const xrayPath = path.join(WORK_DIR, 'xray');
     const argoPath = path.join(WORK_DIR, 'cloudflared');
-    const configPath = path.join(WORK_DIR, 'config.json');
 
     const download = (url, dest) => {
         return new Promise((resolve, reject) => {
@@ -32,8 +33,8 @@ module.exports = async (context) => {
     };
 
     try {
-        context.log(`Creating directory: ${WORK_DIR}`);
-        if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
+        context.log(`Target Directory: ${WORK_DIR}`);
+        fs.mkdirSync(WORK_DIR, { recursive: true });
 
         context.log("Downloading binaries...");
         await Promise.all([
@@ -42,12 +43,8 @@ module.exports = async (context) => {
         ]);
 
         context.log("Extracting Xray...");
-        try {
-            execSync(`unzip -o ${path.join(WORK_DIR, 'xray.zip')} xray -d ${WORK_DIR}`);
-            context.log("Extraction successful.");
-        } catch (unzipErr) {
-            context.error("Unzip error: " + unzipErr.message);
-        }
+        execSync(`unzip -o ${path.join(WORK_DIR, 'xray.zip')} xray -d ${WORK_DIR}`);
+        fs.chmodSync(xrayPath, '755');
 
         const config = {
             inbounds: [{
@@ -58,11 +55,16 @@ module.exports = async (context) => {
             }],
             outbounds: [{ protocol: "freedom" }]
         };
-        fs.writeFileSync(configPath, JSON.stringify(config));
+        fs.writeFileSync(path.join(WORK_DIR, 'config.json'), JSON.stringify(config));
 
         context.log("Launching services...");
-        const xray = spawn(xrayPath, ['-c', configPath]);
+        
+        // Spawn options တွင် Error handle လုပ်ရန် ထပ်တိုးထားသည်
+        const xray = spawn(xrayPath, ['-c', path.join(WORK_DIR, 'config.json')], { detached: true });
         const argo = spawn(argoPath, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
+
+        xray.on('error', (err) => context.error("Xray Spawn Error: " + err.message));
+        argo.on('error', (err) => context.error("Argo Spawn Error: " + err.message));
 
         argo.stderr.on('data', (data) => {
             const output = data.toString();
@@ -75,12 +77,12 @@ module.exports = async (context) => {
             }
         });
 
-        // ၅ မိနစ်ခန့် အလုပ်လုပ်ခိုင်းထားပါ
+        // ၅ မိနစ်ခန့် စောင့်ပေးခြင်း
         await new Promise(resolve => setTimeout(resolve, 300000));
-        return context.res.send("Session Finished.");
+        return context.res.send("Success");
 
     } catch (err) {
-        context.error("Error occurred: " + err.message);
-        return context.res.send("Execution Failed.");
+        context.error("Execution Error: " + err.message);
+        return context.res.send("Failed");
     }
 };
