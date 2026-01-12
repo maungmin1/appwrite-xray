@@ -1,9 +1,8 @@
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 
 module.exports = async (context) => {
-    // Environment Variables
     const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d65';
     const PORT = process.env.PORT || 8080;
     const CFIP = process.env.CFIP || 'www.visa.com.sg';
@@ -18,7 +17,7 @@ module.exports = async (context) => {
                 res.pipe(file);
                 file.on('finish', () => {
                     file.close();
-                    fs.chmodSync(dest, '755'); // ခွင့်ပြုချက်ပေးခြင်း
+                    fs.chmodSync(dest, '755');
                     resolve();
                 });
             }).on('error', reject);
@@ -26,24 +25,31 @@ module.exports = async (context) => {
     };
 
     try {
-        context.log("Cleaning and Downloading binaries...");
-        //old files deleted
-        if (fs.existsSync('/tmp/xray')) fs.unlinkSync('/tmp/xray');
-        if (fs.existsSync('/tmp/cloudflared')) fs.unlinkSync('/tmp/cloudflared');
+        context.log("Cleaning up old processes and files...");
+        // ရှိပြီးသား xray နဲ့ cloudflared process တွေကို အရင်သတ်ပစ်ပါ (ETXTBSY မဖြစ်အောင်)
+        try {
+            execSync('pkill -f xray || true');
+            execSync('pkill -f cloudflared || true');
+        } catch (e) {
+            context.log("No existing processes found.");
+        }
 
-        // Direct Links မ
+        // ဖိုင်နာမည်ကို ထပ်မတူအောင် အနောက်မှာ random နံပါတ် ထည့်လိုက်ပါ (Busy မဖြစ်စေရန်)
+        const timestamp = Date.now();
+        const xrayPath = `/tmp/xray_${timestamp}`;
+        const argoPath = `/tmp/argo_${timestamp}`;
+
+        context.log("Downloading binaries...");
         await Promise.all([
             download("https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", "/tmp/xray.zip"),
-            download("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", "/tmp/cloudflared")
+            download("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", argoPath)
         ]);
 
-        // UNZIP file (Xray)
         context.log("Extracting Xray...");
-        const unzip = spawn('unzip', ['-o', '/tmp/xray.zip', 'xray', '-d', '/tmp/']);
-        await new Promise((res) => unzip.on('exit', res));
-        fs.chmodSync('/tmp/xray', '755');
+        execSync(`unzip -o /tmp/xray.zip xray -d /tmp/ && mv /tmp/xray ${xrayPath}`);
+        fs.chmodSync(xrayPath, '755');
+        fs.chmodSync(argoPath, '755');
 
-        // Config setup
         const config = {
             inbounds: [{
                 port: parseInt(PORT),
@@ -56,8 +62,8 @@ module.exports = async (context) => {
         fs.writeFileSync('/tmp/config.json', JSON.stringify(config));
 
         context.log("Launching services...");
-        const xray = spawn('/tmp/xray', ['-c', '/tmp/config.json']);
-        const argo = spawn('/tmp/cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
+        const xray = spawn(xrayPath, ['-c', '/tmp/config.json']);
+        const argo = spawn(argoPath, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
 
         argo.stderr.on('data', (data) => {
             const output = data.toString();
@@ -70,12 +76,12 @@ module.exports = async (context) => {
             }
         });
 
-        // 3minites wait closed Function
-        await new Promise(resolve => setTimeout(resolve, 180000));
-        return context.res.send("Execution session finished.");
+        // ၅ မိနစ်ခန့် အလုပ်လုပ်ခိုင်းထားပါ
+        await new Promise(resolve => setTimeout(resolve, 300000));
+        return context.res.send("Session Finished.");
 
     } catch (err) {
         context.error("Error occurred: " + err.message);
-        return context.res.send("Failed.");
+        return context.res.send("Execution Failed.");
     }
 };
