@@ -1,11 +1,18 @@
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
 const https = require('https');
+const path = require('path');
 
 module.exports = async (context) => {
     const UUID = process.env.UUID || '0a6568ff-ea3c-4271-9020-450560e10d65';
     const PORT = process.env.PORT || 8080;
     const CFIP = process.env.CFIP || 'www.visa.com.sg';
+
+    // သီးသန့် folder တစ်ခု သတ်မှတ်ခြင်း
+    const WORK_DIR = `/tmp/node_${Date.now()}`;
+    const xrayPath = path.join(WORK_DIR, 'xray');
+    const argoPath = path.join(WORK_DIR, 'cloudflared');
+    const configPath = path.join(WORK_DIR, 'config.json');
 
     const download = (url, dest) => {
         return new Promise((resolve, reject) => {
@@ -25,30 +32,22 @@ module.exports = async (context) => {
     };
 
     try {
-        context.log("Cleaning up old processes and files...");
-        // ရှိပြီးသား xray နဲ့ cloudflared process တွေကို အရင်သတ်ပစ်ပါ (ETXTBSY မဖြစ်အောင်)
-        try {
-            execSync('pkill -f xray || true');
-            execSync('pkill -f cloudflared || true');
-        } catch (e) {
-            context.log("No existing processes found.");
-        }
-
-        // ဖိုင်နာမည်ကို ထပ်မတူအောင် အနောက်မှာ random နံပါတ် ထည့်လိုက်ပါ (Busy မဖြစ်စေရန်)
-        const timestamp = Date.now();
-        const xrayPath = `/tmp/xray_${timestamp}`;
-        const argoPath = `/tmp/argo_${timestamp}`;
+        context.log(`Creating directory: ${WORK_DIR}`);
+        if (!fs.existsSync(WORK_DIR)) fs.mkdirSync(WORK_DIR, { recursive: true });
 
         context.log("Downloading binaries...");
         await Promise.all([
-            download("https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", "/tmp/xray.zip"),
+            download("https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip", path.join(WORK_DIR, 'xray.zip')),
             download("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64", argoPath)
         ]);
 
         context.log("Extracting Xray...");
-        execSync(`unzip -o /tmp/xray.zip xray -d /tmp/ && mv /tmp/xray ${xrayPath}`);
-        fs.chmodSync(xrayPath, '755');
-        fs.chmodSync(argoPath, '755');
+        try {
+            execSync(`unzip -o ${path.join(WORK_DIR, 'xray.zip')} xray -d ${WORK_DIR}`);
+            context.log("Extraction successful.");
+        } catch (unzipErr) {
+            context.error("Unzip error: " + unzipErr.message);
+        }
 
         const config = {
             inbounds: [{
@@ -59,10 +58,10 @@ module.exports = async (context) => {
             }],
             outbounds: [{ protocol: "freedom" }]
         };
-        fs.writeFileSync('/tmp/config.json', JSON.stringify(config));
+        fs.writeFileSync(configPath, JSON.stringify(config));
 
         context.log("Launching services...");
-        const xray = spawn(xrayPath, ['-c', '/tmp/config.json']);
+        const xray = spawn(xrayPath, ['-c', configPath]);
         const argo = spawn(argoPath, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`]);
 
         argo.stderr.on('data', (data) => {
