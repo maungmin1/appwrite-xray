@@ -1,0 +1,112 @@
+name: Build and Release Appwrite
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'src/main.js'
+      - 'package.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  actions: read
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        
+    - name: Validate required files
+      run: |
+        if [ ! -f "src/main.js" ]; then
+          echo "❌ main.js not found!"
+          exit 1
+        fi
+        if [ ! -f "package.json" ]; then
+          echo "❌ package.json not found!"
+          exit 1
+        fi
+        echo "✅ Required files found"
+        
+    - name: Display file info
+      run: |
+        echo "📋 Files to be packaged:"
+        echo "📁 src/ folder:"
+        ls -la src/
+        echo "📄 src/main.js ($(wc -l < src/main.js) lines, $(du -h src/main.js | cut -f1))"
+        echo "📄 package.json ($(du -h package.json | cut -f1))"
+        echo ""
+        echo "📦 Package.json content:"
+        cat package.json
+        
+    - name: Create package directory
+      run: |
+        mkdir -p Appwrite
+        
+    - name: Copy files to package directory
+      run: |
+        cp -r src/ Appwrite/
+        cp package.json Appwrite/
+        echo "✅ Files copied to package directory"
+        echo "📁 Package directory contents:"
+        ls -la Appwrite/
+        
+    - name: Create deployment archive
+      run: |
+        cd Appwrite
+        tar -czf ../Appwrite.tar.gz src/main.js package.json
+        cd ..
+        echo "📦 Archive created: Appwrite.tar.gz"
+        echo "📊 Archive size: $(du -h Appwrite.tar.gz | cut -f1)"
+        
+    - name: Verify archive contents
+      run: |
+        echo "🔍 Archive contents:"
+        tar -tzf Appwrite.tar.gz
+        
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        # 获取最近的提交信息
+        LATEST_COMMIT=$(git log -1 --pretty=format:"%s")
+        COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
+        COMMIT_DATE=$(git log -1 --pretty=format:"%cd" --date=format:"%Y-%m-%d %H:%M")
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        
+        cat > release_notes.md << EOF
+        ## 🚀 Appwrite Functions 部署包
+
+        ⭐ 快速开始: 创建Functions → 配置环境变量 → 下载压缩包 → 上传压缩包到Appwrite → 等待部署完成！
+        
+        EOF
+        
+    - name: Create or Update Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: "Appwrite-latest"
+        name: "Appwrite Functions"
+        body_path: release_notes.md
+        files: Appwrite.tar.gz
+        draft: false
+        prerelease: false
+        make_latest: true
+        overwrite: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Release Summary
+      run: |
+        echo "🎉 自动构建和发布完成!"
+        echo "📦 包文件: Appwrite.tar.gz"
+        echo "🏷️ 发布名称: Appwrite Functions"
+        echo "🔗 发布地址: https://github.com/${{ github.repository }}/releases/tag/Appwrite-latest"
