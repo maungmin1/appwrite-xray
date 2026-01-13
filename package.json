@@ -1,8 +1,18 @@
 {
-  "name": "appwrite-node",
+  "name": "nodejs",
   "version": "1.0.0",
-  "main": "src/main.js",  
+  "description": "Appwrite",
+  "main": "src/main.js",
+  "author": "eooce",
+  "license": "MIT",
+  "private": false,
   "scripts": {
-    "start": "node src/main.js" 
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "axios": "latest"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
